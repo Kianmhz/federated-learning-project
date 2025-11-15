@@ -54,7 +54,6 @@ def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0
     while True:
         print(f"[Client {client_id}] Fetching global model...")
         r = requests.get(f"{SERVER_URL}/get_model").json()
-        global_round = r["round"]
 
         # Load server weights
         model = get_model()
@@ -70,23 +69,15 @@ def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0
         local_state = {k: v.clone().float() for k, v in model.state_dict().items()}
 
         # If debug and dp enabled, compute raw stats
-        raw_sample = None
-        raw_norm = None
         if dp_enabled and debug:
-            try:
-                raw_update = {k: (local_state[k] - global_state[k]).float() for k in global_state.keys()}
-                raw_flat = torch.cat([v.view(-1) for v in raw_update.values()])
-                raw_sample = raw_flat[:5].cpu().tolist()
-                raw_norm = float(raw_flat.norm().item())
-            except Exception:
-                raw_sample, raw_norm = None, None
+            raw_update = {k: (local_state[k] - global_state[k]).float() for k in global_state.keys()}
 
         weights_to_send = _add_dp_to_update(global_state, local_state,
                                            clip_norm=clip_norm,
                                            noise_multiplier=noise_multiplier,
                                            dp_enabled=dp_enabled)
 
-        # If debug and dp enabled, compute post stats and print both in presentation-friendly format
+        # If debug and dp enabled, compute post stats and print both
         if dp_enabled and debug:
             try:
                 # compute global_norm and clip coef similar to _add_dp_to_update
@@ -109,7 +100,7 @@ def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0
                     post_norm = float(post_t.norm().item())
                     per_tensor_stats.append((k, pre_sample, pre_norm, post_sample, post_norm))
 
-                # Compact table-style debug output for presentation
+                # Compact table-style debug output
                 header = f"{'key':25} {'#params':>8} {'PRE_norm':>10} {'EXP_noise':>12} {'POST_norm':>12}"
                 print('\n--- CLIENT DP DEBUG ---')
                 print(f'global_flat_norm: {global_norm:.6f} | clip_norm: {clip_norm} | clip_coef: {clip_coef:.6f} | noise_std: {stddev}')
@@ -117,7 +108,7 @@ def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0
                 print('-' * len(header))
                 total_params = 0
                 total_expected_noise = 0.0
-                for (k, pre_s, pre_n, post_s, post_n) in per_tensor_stats:
+                for (k, _, pre_n, _, post_n) in per_tensor_stats:
                     numel = int(raw_update[k].numel())
                     expected_noise = stddev * (numel ** 0.5)
                     total_params += numel
