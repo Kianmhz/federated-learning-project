@@ -13,6 +13,12 @@ def _load_mnist(download=True):
     test = datasets.MNIST("./data", train=False, download=download, transform=transform)
     return train, test
 
+def get_dataloader(batch_size=32, download=True):
+    train, test = _load_mnist(download=download)
+    train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=False)
+    return train_loader, test_loader
+
 # Split dataset indices IID among num_clients as evenly as possible.
 def iid_split(dataset, num_clients):
     n = len(dataset)

@@ -5,7 +5,7 @@ import requests
 import torch
 import argparse
 from fl_core.model_def import get_model
-from clients.data_utils import get_dataloader
+from clients.data_utils import get_dataloader, get_client_loaders
 from clients.training import train_local
 
 SERVER_URL = "http://127.0.0.1:9000"
@@ -49,9 +49,8 @@ def _add_dp_to_update(global_state, local_state, clip_norm=1.0, noise_multiplier
     return _serialize_state(noised_update)
 
 
-def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0, debug=False):
-    train_loader, _ = get_dataloader()
-
+def run_client_loop(train_loader, client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0, debug=False):
+    """Run the main client loop using the provided train_loader."""
     while True:
         print(f"[Client {client_id}] Fetching global model...")
         r = requests.get(f"{SERVER_URL}/get_model").json()
@@ -132,6 +131,13 @@ def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0
         time.sleep(3)
 
 
+def client_loop(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0, debug=False):
+    # default: load full dataset (backwards-compatible). If caller set CLIENT_LOADERS
+    # externally they can pass a per-client loader via closure; here we default to full loader.
+    train_loader, _ = get_dataloader()
+    run_client_loop(train_loader, client_id, dp_enabled=dp_enabled, noise_multiplier=noise_multiplier, clip_norm=clip_norm, debug=debug)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Federated client with optional DP on updates")
     parser.add_argument("client_id", nargs="?", default="1", help="Client id string")
@@ -139,7 +145,51 @@ if __name__ == "__main__":
     parser.add_argument("--noise", type=float, default=0.0, help="Noise multiplier (std = noise * clip)")
     parser.add_argument("--clip", type=float, default=1.0, help="Clip norm for DP (L2)" )
     parser.add_argument("--debug", action="store_true", help="Enable client-side debug prints (works with --dp)")
+    # options to control client-side data partitioning
+    parser.add_argument("--num-clients", type=int, default=10, help="Total number of clients for splitting train data")
+    parser.add_argument("--non-iid", action="store_true", help="Use Dirichlet non-IID split instead of IID")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Dirichlet alpha parameter (smaller -> more skew)")
 
     args = parser.parse_args()
-    # pass debug flag through to client loop; debug prints are gated by dp_enabled && args.debug
-    client_loop(args.client_id, dp_enabled=args.dp, noise_multiplier=args.noise, clip_norm=args.clip, debug=args.debug)
+    # Presentation-friendly confirmation: print whether we're running IID or non-IID
+    if args.non_iid:
+        print(f"[CLIENT] Running with non-IID Dirichlet split (num_clients={args.num_clients}, alpha={args.alpha})")
+    else:
+        print(f"[CLIENT] Running with IID split (num_clients={args.num_clients})")
+
+    # If user requested per-client partitioning, create client loaders and pick the client's loader
+    if args.num_clients is not None:
+        clients_loaders, _ = get_client_loaders(num_clients=args.num_clients, iid=(not args.non_iid), alpha=args.alpha)
+
+        # replace get_dataloader behavior by injecting local loader into client_loop via closure
+        def client_loop_with_local_loader(client_id, dp_enabled=False, noise_multiplier=0.0, clip_norm=1.0, debug=False):
+            try:
+                cid = int(client_id)
+            except Exception:
+                cid = 0
+            # pick loader for this client id
+            train_loader = clients_loaders.get(cid, None)
+            # Validate requested client id
+            if cid < 0 or cid >= args.num_clients:
+                print(f"[CLIENT] ERROR: client_id={cid} out of range for num_clients={args.num_clients}. Falling back to full loader.")
+                train_loader, _ = get_dataloader()
+            else:
+                # report selected partition size
+                if train_loader is not None:
+                    try:
+                        print(f"[CLIENT] Loaded partition for client {cid}: {len(train_loader.dataset)} samples")
+                    except Exception:
+                        print(f"[CLIENT] Loaded partition for client {cid}")
+            if train_loader is None:
+                # fallback to full loader
+                print(f"[Client {client_id}] WARNING: no local loader found, using full dataset loader")
+                train_loader, _ = get_dataloader()
+
+            # use the shared run_client_loop to avoid duplication
+            run_client_loop(train_loader, client_id, dp_enabled=dp_enabled, noise_multiplier=noise_multiplier, clip_norm=clip_norm, debug=debug)
+
+        # run the modified client loop
+        client_loop_with_local_loader(args.client_id, dp_enabled=args.dp, noise_multiplier=args.noise, clip_norm=args.clip, debug=args.debug)
+    else:
+        # pass debug flag through to client loop; debug prints are gated by dp_enabled && args.debug
+        client_loop(args.client_id, dp_enabled=args.dp, noise_multiplier=args.noise, clip_norm=args.clip, debug=args.debug)
