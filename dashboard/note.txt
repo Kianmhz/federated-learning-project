@@ -1,1 +1,0 @@
-(either React app or templates + static if using FastAPI)
