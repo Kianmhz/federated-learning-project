@@ -64,33 +64,3 @@ numpy==2.0.1
 # WHY: Clients use this to communicate with server
 # EXAMPLE: requests.post(f"{SERVER_URL}/submit_update", json=data)
 requests==2.31.0
-
-# ============================================================
-# OPTIONAL - DEVELOPMENT TOOLS (Uncomment if needed)
-# ============================================================
-
-# Pytest - Testing framework
-# pytest==7.4.3
-
-# Black - Code formatter
-# black==23.11.0
-
-# Flake8 - Linting tool
-# flake8==6.1.0
-
-# ============================================================
-# VERSION COMPATIBILITY NOTES
-# ============================================================
-#
-# Python Version: Python 3.12 supported
-#
-# NumPy:
-# - Must be >=2.0.0 for Python 3.12
-#
-# PyTorch:
-# - torch==2.5.0 includes official Python 3.12 wheels
-#
-# FastAPI Updates:
-# - Uvicorn + FastAPI versions bumped to match Python 3.12 compatibility
-#
-# ============================================================
