@@ -18,17 +18,17 @@
 # FastAPI - Modern, fast web framework for building APIs
 # WHY: Creates REST API endpoints for client-server communication
 # EXAMPLE: @app.get("/get_model") creates an endpoint
-fastapi==0.104.1
+fastapi==0.109.2
 
 # Uvicorn - ASGI server to run FastAPI
 # WHY: FastAPI needs a server to actually run and accept requests
 # ANALOGY: FastAPI is a restaurant, Uvicorn is the building it runs in
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.27.1
 
 # Pydantic - Data validation using Python type hints
 # WHY: Validates incoming data automatically (comes with FastAPI)
 # EXAMPLE: UpdateRequest(BaseModel) validates client submissions
-pydantic==2.5.0
+pydantic==2.5.3
 
 # ============================================================
 # 2. MACHINE LEARNING - PyTorch Stack
@@ -36,13 +36,15 @@ pydantic==2.5.0
 
 # PyTorch - Deep learning framework
 # WHY: Used for defining, training, and evaluating neural networks
-# NOTE: This installs CPU version. For GPU: torch==2.1.0+cu118
-torch==2.1.0
+# NOTE: This installs CPU version. For GPU: see https://pytorch.org/get-started/locally/
+# Updated to work with Python 3.12+
+torch==2.5.0
 
 # TorchVision - Computer vision datasets and transforms
 # WHY: Provides MNIST dataset and image preprocessing
 # EXAMPLE: datasets.MNIST() loads the handwritten digits dataset
-torchvision==0.16.0
+# Updated to match torch version
+torchvision==0.20.0
 
 # ============================================================
 # 3. DATA PROCESSING
@@ -51,7 +53,8 @@ torchvision==0.16.0
 # NumPy - Numerical computing library
 # WHY: Array operations, data splitting, Dirichlet distribution
 # EXAMPLE: np.random.dirichlet() for non-IID data partitioning
-numpy==1.24.3
+# NOTE: 1.x does NOT support Python 3.12 → updated to 2.0+
+numpy==2.0.1
 
 # ============================================================
 # 4. HTTP CLIENT - For Client-Server Communication
@@ -79,16 +82,15 @@ requests==2.31.0
 # VERSION COMPATIBILITY NOTES
 # ============================================================
 #
-# Python Version: 3.8 - 3.11 recommended
-# - Python 3.12+ may have compatibility issues with some libraries
+# Python Version: Python 3.12 supported
 #
-# PyTorch GPU Support:
-# - For CUDA 11.8: torch==2.1.0+cu118
-# - For CUDA 12.1: torch==2.1.0+cu121
-# - Install from: https://pytorch.org/get-started/locally/
+# NumPy:
+# - Must be >=2.0.0 for Python 3.12
+#
+# PyTorch:
+# - torch==2.5.0 includes official Python 3.12 wheels
 #
 # FastAPI Updates:
-# - These versions are stable as of Nov 2024
-# - Check for updates: pip list --outdated
+# - Uvicorn + FastAPI versions bumped to match Python 3.12 compatibility
 #
 # ============================================================

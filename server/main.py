@@ -1,203 +1,107 @@
-"""
-Federated Learning Server - Complete Implementation
-===================================================
-
-This server coordinates federated learning between multiple edge clients.
-
-ARCHITECTURE:
-- Clients train locally on their data
-- Clients send model updates (not raw data) to this server
-- Server aggregates updates using Federated Averaging (FedAvg)
-- Server evaluates global model accuracy
-- Dashboard connects to monitor training in real-time
-
-ENDPOINTS:
-- GET  /                 : Health check
-- GET  /get_model        : Clients download global model
-- POST /submit_update    : Clients submit trained updates
-- GET  /status          : Dashboard gets system status
-- GET  /metrics         : Dashboard gets training metrics
-"""
-
+# ============ IMPORTS ============
 import os
-import sys
-from datetime import datetime
+import sys  # Path manipulation
+from datetime import datetime  # Timestamps
 
-import torch
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import torch  # PyTorch for model evaluation
+from fastapi import FastAPI  # Web framework for building APIs
+from fastapi.middleware.cors import CORSMiddleware  # Allow cross-origin requests
+from pydantic import BaseModel  # Data validation
 
-# Add parent directory to path so we can import from server package
-# This allows the script to find 'server.aggregator' when run from root
+# Add parent directory to Python path (for imports to work)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from server.aggregator import Aggregator  # Your partner's aggregation logic
 
-from server.aggregator import Aggregator
+# ============ SETUP FASTAPI ============
+app = FastAPI(title="Federated Learning Server", version="1.0.0")
 
-# ============================================================
-# INITIALIZE FASTAPI APP
-# ============================================================
-app = FastAPI(
-    title="Federated Learning Server",
-    description="Coordinates distributed machine learning across edge devices",
-    version="1.0.0",
-)
-
-# ============================================================
-# CORS MIDDLEWARE - Critical for Dashboard Connection
-# ============================================================
-# WHAT IS CORS?
-# Cross-Origin Resource Sharing allows your React app (running on
-# localhost:3000) to make requests to this server (localhost:9000).
-# Without this, browsers block the requests for security.
-#
-# ANALOGY: Like a security guard allowing visitors from building 3000
-# to enter building 9000.
+# Enable CORS - Allow React dashboard (localhost:3000) to connect
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins (fine for development)
-    allow_credentials=True,  # Allow cookies/auth headers
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allow all headers
 )
 
-# ============================================================
-# GLOBAL STATE
-# ============================================================
-# Create ONE aggregator instance that persists across requests
-# Why global? All clients need to share the same model state
-agg = Aggregator()
 
-# Track client activity for dashboard visualization
-# Structure: {client_id: {status, timestamp, data_size, round}}
-clients_status = {}
+# ============ GLOBAL STATE ============
+# These variables persist across HTTP requests
 
-# Store training history for charts
-# Structure: [{round, accuracy, timestamp, loss}, ...]
-training_history = []
-
-# Configuration
-UPDATES_PER_ROUND = 3  # Wait for this many client updates before aggregating
+agg = Aggregator()  # The aggregator (your partner's code)
+clients_status = {}  # Track active clients: {client_id: {status, timestamp, ...}}
+training_history = []  # Store metrics: [{round, accuracy, loss, ...}, ...]
+UPDATES_PER_ROUND = 3  # Wait for 3 client updates before aggregating
 
 
-# ============================================================
-# DATA MODELS (Type Validation)
-# ============================================================
-# Pydantic models validate incoming data automatically
-# If a client sends wrong format, FastAPI returns error
+# ============ DATA VALIDATION ============
 class UpdateRequest(BaseModel):
-    """Data structure for client updates"""
+    """Validate client update format"""
 
-    weights: dict  # Model weights as nested dict of lists
-    data_size: int  # Number of training samples client used
-
-    class Config:
-        # Example for API documentation
-        schema_extra = {
-            "example": {
-                "weights": {"layer1.weight": [[0.1, 0.2], [0.3, 0.4]]},
-                "data_size": 6000,
-            }
-        }
+    client_id: str
+    weights: dict  # Model weights as nested dict
+    data_size: int  # Number of samples client trained on
 
 
-# ============================================================
-# ENDPOINTS
-# ============================================================
+# ============ API ENDPOINTS ============
 
 
 @app.get("/")
 def root():
     """
-    Health check endpoint - confirms server is running
+    Health check - Confirm server is running
 
-    USE CASE: Monitoring, debugging, automated health checks
-
-    EXAMPLE RESPONSE:
-    {
-        "status": "Federated Learning Server Running",
-        "round": 5,
-        "clients_seen": 10,
-        "pending_updates": 2
-    }
+    WHEN CALLED: Browser visits http://127.0.0.1:9000
+    RETURNS: JSON with server status
     """
     return {
         "status": "Federated Learning Server Running",
         "round": agg.current_round,
         "clients_seen": len(clients_status),
         "pending_updates": len(agg.updates),
-        "version": "1.0.0",
     }
 
 
 @app.get("/get_model")
 def get_model():
     """
-    Clients download the current global model
+    Clients download the global model
 
-    WORKFLOW:
-    1. Client requests model weights
-    2. Server converts PyTorch tensors → Python lists (JSON compatible)
-    3. Client receives weights and loads them into local model
+    WHEN CALLED: Client runs requests.get(f"{SERVER_URL}/get_model")
+    WHAT IT DOES: Returns current global model weights
+    RETURNS: {"round": 5, "weights": {...}}
 
-    WHY RETURN LISTS?
-    PyTorch tensors can't be sent over HTTP (not JSON serializable).
-    We convert to lists for transmission, client converts back to tensors.
-
-    EXAMPLE RESPONSE:
-    {
-        "round": 5,
-        "weights": {
-            "conv1.weight": [[0.1, 0.2], ...],
-            "conv1.bias": [0.3, 0.4, ...],
-            ...
-        }
-    }
+    DISTRIBUTED CONCEPT: Model Synchronization
+    All clients get same starting point each round
     """
     return {
         "round": agg.current_round,
-        "weights": agg.get_weights(),  # Already returns dict of lists
+        "weights": agg.get_weights(),  # Convert tensors → lists
     }
 
 
 @app.post("/submit_update")
 def submit_update(upd: UpdateRequest):
     """
-    Clients submit their trained model updates
+    Clients submit trained model updates
 
-    WORKFLOW:
-    1. Client trains locally (never sends raw data)
-    2. Client sends model update (difference from global model)
-    3. Server stores update
-    4. If enough updates (3), server aggregates them
-    5. Server evaluates new global model
-    6. Server stores metrics for dashboard
+    WHEN CALLED: Client runs requests.post(f"{SERVER_URL}/submit_update", json={...})
+    WHAT IT DOES:
+    1. Store client's update
+    2. Track client activity
+    3. If 3 updates received → aggregate them
+    4. Evaluate new model accuracy
+    5. Store metrics for dashboard
 
-    WHY WAIT FOR 3 UPDATES?
-    - Federated learning uses "rounds" with multiple clients
-    - Aggregating too often: inefficient, noisy updates
-    - Aggregating too rarely: slow convergence
-    - 3 is a balance for demo purposes (adjust UPDATES_PER_ROUND)
+    RETURNS: {"status": "received", "round": 5, ...}
 
-    EXAMPLE REQUEST:
-    {
-        "weights": {"layer1.weight": [[0.1, 0.2], ...]},
-        "data_size": 6000
-    }
-
-    EXAMPLE RESPONSE:
-    {
-        "status": "received",
-        "round": 5,
-        "pending_updates": 1,
-        "message": "Update stored. Waiting for 2 more updates."
-    }
+    DISTRIBUTED CONCEPT: Asynchronous Aggregation
+    Clients submit independently, server aggregates when ready
     """
-    # Store the update in aggregator
+    # Store update in aggregator
     agg.receive_update(upd.weights, upd.data_size)
 
-    # Track this client for dashboard
-    client_id = len(clients_status)  # Simple ID: 0, 1, 2, ...
+    # Track this client (for dashboard)
+    client_id = upd.client_id
     clients_status[client_id] = {
         "status": "submitted",
         "timestamp": datetime.now().isoformat(),
@@ -206,188 +110,125 @@ def submit_update(upd: UpdateRequest):
     }
 
     print(
-        f"[SERVER] ✓ Client {client_id} submitted update. "
-        f"Updates: {len(agg.updates)}/{UPDATES_PER_ROUND}"
+        f"[SERVER] ✓ Client {client_id} submitted. Updates: {len(agg.updates)}/{UPDATES_PER_ROUND}"
     )
 
-    # Check if we have enough updates to aggregate
+    # Check if ready to aggregate
     if len(agg.updates) >= UPDATES_PER_ROUND:
         print(f"[SERVER] 🔄 Aggregating round {agg.current_round + 1}...")
 
-        # Perform Federated Averaging
+        # Perform Federated Averaging (your partner's code)
         agg.aggregate()
 
-        # Evaluate the new global model
+        # Test the new model
         accuracy, loss = evaluate_model()
 
-        # Store metrics for dashboard charts
+        # Store metrics for dashboard
         training_history.append(
             {
                 "round": agg.current_round,
                 "accuracy": accuracy,
                 "loss": loss,
                 "timestamp": datetime.now().isoformat(),
-                "num_clients": UPDATES_PER_ROUND,
             }
         )
 
         print(
-            f"[SERVER] ✅ Round {agg.current_round} complete. "
-            f"Accuracy: {accuracy:.2%}, Loss: {loss:.4f}"
+            f"[SERVER] ✅ Round {agg.current_round} complete. Acc: {accuracy:.2%}, Loss: {loss:.4f}"
         )
 
         return {
             "status": "aggregated",
             "round": agg.current_round,
             "accuracy": accuracy,
-            "message": f"Round {agg.current_round} complete!",
         }
 
     # Not enough updates yet
-    remaining = UPDATES_PER_ROUND - len(agg.updates)
     return {
         "status": "received",
         "round": agg.current_round,
         "pending_updates": len(agg.updates),
-        "message": f"Update stored. Waiting for {remaining} more updates.",
     }
 
 
 @app.get("/status")
 def get_status():
     """
-    Dashboard calls this to get current system state
+    Dashboard gets system status
 
-    PURPOSE: Provide real-time snapshot of the entire system
+    WHEN CALLED: Dashboard runs fetch('http://127.0.0.1:9000/status')
+    WHAT IT DOES: Return snapshot of entire system state
+    RETURNS: {current_round, active_clients, clients: {...}, history: [...]}
 
-    CALLED BY: Dashboard every 2 seconds via polling
-
-    RETURNS:
-    - current_round: Which training round we're on
-    - active_clients: How many clients have submitted
-    - pending_updates: Updates waiting to be aggregated
-    - clients: Details about each client
-    - history: Last 20 rounds of training metrics
-
-    EXAMPLE RESPONSE:
-    {
-        "current_round": 5,
-        "active_clients": 10,
-        "pending_updates": 2,
-        "clients": {
-            "0": {"status": "submitted", "data_size": 6000, ...},
-            "1": {"status": "submitted", "data_size": 5800, ...}
-        },
-        "history": [
-            {"round": 1, "accuracy": 0.82, "loss": 0.45},
-            {"round": 2, "accuracy": 0.85, "loss": 0.38},
-            ...
-        ]
-    }
+    USED BY: Dashboard to show real-time metrics
     """
     return {
         "current_round": agg.current_round,
         "active_clients": len(clients_status),
         "pending_updates": len(agg.updates),
         "clients": clients_status,
-        "history": training_history[-20:],  # Last 20 rounds only
+        "history": training_history[-20:],  # Last 20 rounds
     }
 
 
 @app.get("/metrics")
 def get_metrics():
     """
-    Dashboard calls this to get training metrics for charts
+    Dashboard gets training metrics for charts
 
-    PURPOSE: Provide data formatted for visualization
+    WHEN CALLED: Dashboard runs fetch('http://127.0.0.1:9000/metrics')
+    WHAT IT DOES: Return data formatted for charts
+    RETURNS: {rounds: [...], accuracy: [...], loss: [...]}
 
-    WHY SEPARATE FROM /status?
-    - Status changes every 2 seconds (client activity)
-    - Metrics only change after aggregation (less frequent)
-    - Separating reduces unnecessary data transfer
-
-    CHART FRIENDLY FORMAT:
-    Returns parallel arrays for easy plotting:
-    - rounds: [1, 2, 3, 4, 5]
-    - accuracy: [0.82, 0.85, 0.87, 0.89, 0.91]
-    - loss: [0.45, 0.38, 0.32, 0.28, 0.24]
-
-    EXAMPLE RESPONSE:
-    {
-        "round": 5,
-        "rounds": [1, 2, 3, 4, 5],
-        "accuracy": [0.82, 0.85, 0.87, 0.89, 0.91],
-        "loss": [0.45, 0.38, 0.32, 0.28, 0.24],
-        "total_history": 5
-    }
+    USED BY: Dashboard to plot accuracy/loss over time
     """
     return {
         "round": agg.current_round,
         "rounds": [h["round"] for h in training_history],
         "accuracy": [h["accuracy"] for h in training_history],
         "loss": [h["loss"] for h in training_history],
-        "total_history": len(training_history),
     }
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# ============ HELPER FUNCTIONS ============
 
 
 def evaluate_model():
     """
-    Evaluate the global model on test data
+    Test global model on test dataset
 
-    WHAT IS EVALUATION?
-    Testing the model on data it has NEVER seen during training.
-    This measures real-world performance.
+    WHAT IT DOES:
+    1. Load MNIST test set (10,000 images model hasn't seen)
+    2. Run predictions on all images
+    3. Calculate accuracy (% correct)
+    4. Calculate loss (how confident/wrong predictions are)
 
-    ANALOGY:
-    - Training: Studying with practice problems
-    - Evaluation: Taking the actual exam with new questions
+    RETURNS: (accuracy, loss)
 
-    PROCESS:
-    1. Load test dataset (10,000 MNIST images)
-    2. Run each image through model
-    3. Compare prediction to actual label
-    4. Calculate accuracy and loss
+    WHY IMPORTANT: This tells us if model is actually learning!
 
-    WHY model.eval()?
-    - Disables dropout (regularization technique)
-    - Disables batch normalization updates
-    - Makes predictions deterministic
-
-    WHY torch.no_grad()?
-    - Disables gradient computation (saves memory)
-    - We're not training, so don't need gradients
-    - Makes evaluation much faster
-
-    RETURNS:
-    - accuracy: float (0.0 to 1.0) - % of correct predictions
-    - loss: float - average cross-entropy loss
+    DISTRIBUTED CONCEPT: Centralized Evaluation
+    Server evaluates on test set to measure global model quality
     """
     import torch.nn.functional as F
 
     from clients.data_utils import get_dataloader
 
-    # Load test dataset
+    # Load test data
     _, test_loader = get_dataloader(batch_size=128)
 
     # Get model and set to evaluation mode
     model = agg.global_model
-    model.eval()
+    model.eval()  # Disable dropout, batch norm
 
-    # Initialize counters
     correct = 0
     total = 0
     total_loss = 0.0
     num_batches = 0
 
-    # Disable gradient computation
-    with torch.no_grad():
+    # Test on all images
+    with torch.no_grad():  # Don't compute gradients (faster)
         for images, labels in test_loader:
-            # Forward pass
             outputs = model(images)
 
             # Calculate loss
@@ -395,46 +236,29 @@ def evaluate_model():
             total_loss += loss.item()
             num_batches += 1
 
-            # Get predictions (class with highest probability)
+            # Get predictions
             _, predicted = torch.max(outputs.data, 1)
 
-            # Count correct predictions
+            # Count correct
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-    # Calculate final metrics
     accuracy = correct / total
     avg_loss = total_loss / num_batches
 
     return accuracy, avg_loss
 
 
-# ============================================================
-# SERVER STARTUP
-# ============================================================
-
+# ============ START SERVER ============
 if __name__ == "__main__":
     import uvicorn
 
     print("=" * 70)
-    print("🚀 FEDERATED LEARNING SERVER STARTING")
+    print("🚀 FEDERATED LEARNING SERVER")
     print("=" * 70)
-    print()
-    print("📍 Server URL:     http://127.0.0.1:9000")
-    print("📊 API Docs:       http://127.0.0.1:9000/docs")
-    print("🎨 Dashboard:      http://localhost:3000 (start React app)")
-    print()
-    print("⚙️  Configuration:")
-    print(f"   - Aggregation:  Every {UPDATES_PER_ROUND} client updates")
-    print(f"   - Dataset:      MNIST (handwritten digits)")
-    print(f"   - Algorithm:    Federated Averaging (FedAvg)")
-    print()
-    print("🤖 Start clients:")
-    print("   python clients/client.py 1 --num-clients 10 --non-iid")
-    print("   python clients/client.py 2 --num-clients 10 --non-iid")
-    print("   python clients/client.py 3 --num-clients 10 --non-iid")
-    print()
+    print(f"📍 Server:    http://127.0.0.1:9000")
+    print(f"📊 API Docs:  http://127.0.0.1:9000/docs")
+    print(f"⚙️  Aggregation: Every {UPDATES_PER_ROUND} client updates")
     print("=" * 70)
 
-    # Run the server
     uvicorn.run(app, host="0.0.0.0", port=9000)
