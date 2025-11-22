@@ -46,6 +46,13 @@ UPDATES_PER_ROUND = max(MIN_UPDATES_TO_AGGREGATE, ceil(PARTICIPATION_PROB * NUM_
 # Deterministic per-round selection storage: round_index -> set(client_id_str)
 selected_clients_by_round = {}
 
+# Adaptive participation tuning parameters
+# If recent accuracy improvement over P_ADJUST_WINDOW rounds is < P_IMPROVE_MIN,
+# increase PARTICIPATION_PROB by P_INCREMENT (once per round at most).
+P_ADJUST_WINDOW = 5
+P_IMPROVE_MIN = 1e-3
+P_INCREMENT = 0.1
+last_p_adjust_round = -1
 
 
 def update_updates_per_round():
@@ -70,6 +77,34 @@ def select_participants_for_round(round_idx: int):
     selected_clients_by_round[round_idx] = sampled
     print(f"[SERVER] Selected {len(sampled)} participants for round {round_idx}: {sorted(list(sampled))}")
     return sampled
+
+
+def adjust_participation():
+    """Increase PARTICIPATION_PROB when convergence stalls over recent rounds.
+
+    Simple heuristic: if improvement over the last P_ADJUST_WINDOW rounds is less
+    than P_IMPROVE_MIN, bump PARTICIPATION_PROB by P_INCREMENT (capped at 1.0)
+    and recompute UPDATES_PER_ROUND. Only adjust once per round.
+    """
+    global PARTICIPATION_PROB, last_p_adjust_round
+    current = agg.current_round
+    if current <= 0:
+        return
+    if last_p_adjust_round >= current:
+        return
+    if len(training_history) < P_ADJUST_WINDOW:
+        return
+
+    recent = training_history[-P_ADJUST_WINDOW:]
+    first_acc = recent[0]["accuracy"]
+    last_acc = recent[-1]["accuracy"]
+    improvement = last_acc - first_acc
+    if improvement < P_IMPROVE_MIN and PARTICIPATION_PROB < 1.0:
+        PARTICIPATION_PROB = min(1.0, PARTICIPATION_PROB + P_INCREMENT)
+        update_updates_per_round()
+        last_p_adjust_round = current
+        print(f"[SERVER] ↑ Participation increased to {PARTICIPATION_PROB:.2f}; target updates {UPDATES_PER_ROUND}")
+
 
 # ============ DATA VALIDATION ============
 class UpdateRequest(BaseModel):
@@ -174,6 +209,12 @@ def submit_update(upd: UpdateRequest):
 
         # Perform Federated Averaging (your partner's code)
         agg.aggregate()
+
+        # Optionally adjust participation probability based on recent progress
+        try:
+            adjust_participation()
+        except Exception as e:
+            print(f"[SERVER] Participation adjustment failed: {e}")
 
         # Test the new model
         accuracy, loss = evaluate_model()
