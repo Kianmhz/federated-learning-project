@@ -68,7 +68,24 @@ def run_client_loop(
 ):
     """Run the main client loop using the provided train_loader."""
     while True:
-        print(f"[Client {client_id}] Fetching global model...")
+        # First: ask server whether this client should participate this round
+        try:
+            sel = requests.get(f"{SERVER_URL}/should_participate", params={"client_id": client_id}).json()
+            selected = bool(sel.get("selected", False))
+            server_round = sel.get("round", None)
+        except Exception as e:
+            print(f"[Client {client_id}] Failed to fetch participation decision: {e}. Defaulting to participate.")
+            selected = True
+            server_round = None
+
+        if not selected:
+            print(f"[Client {client_id}] Not selected for round {server_round}. Sleeping until next check...")
+            import time
+
+            time.sleep(3)
+            continue
+
+        print(f"[Client {client_id}] Selected for round {server_round}. Fetching global model...")
         r = requests.get(f"{SERVER_URL}/get_model").json()
 
         # Load server weights
@@ -227,7 +244,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    # Presentation-friendly confirmation: print whether we're running IID or non-IID
+    # print whether we're running IID or non-IID
     if args.non_iid:
         print(
             f"[CLIENT] Running with non-IID Dirichlet split (num_clients={args.num_clients}, alpha={args.alpha})"

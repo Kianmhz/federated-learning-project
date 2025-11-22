@@ -2,6 +2,8 @@
 import os
 import sys  # Path manipulation
 from datetime import datetime  # Timestamps
+from math import ceil
+import random  # Random sampling
 
 import torch  # PyTorch for model evaluation
 from fastapi import FastAPI  # Web framework for building APIs
@@ -30,8 +32,44 @@ app.add_middleware(
 agg = Aggregator()  # The aggregator (your partner's code)
 clients_status = {}  # Track active clients: {client_id: {status, timestamp, ...}}
 training_history = []  # Store metrics: [{round, accuracy, loss, ...}, ...]
-UPDATES_PER_ROUND = 3  # Wait for 3 client updates before aggregating
 
+# Partial participation settings
+# p = probability a client is selected each round (server-side configured)
+# expected_selected = round(p * num_clients) can be used as a target, but server
+# will aggregate as soon as it receives updates from all selected clients OR when
+# at least MIN_UPDATES_TO_AGGREGATE are available.
+PARTICIPATION_PROB = 0.5
+NUM_CLIENTS = 10
+MIN_UPDATES_TO_AGGREGATE = 1  # safety lower bound
+UPDATES_PER_ROUND = max(MIN_UPDATES_TO_AGGREGATE, ceil(PARTICIPATION_PROB * NUM_CLIENTS))
+
+# Deterministic per-round selection storage: round_index -> set(client_id_str)
+selected_clients_by_round = {}
+
+
+
+def update_updates_per_round():
+    """Update UPDATES_PER_ROUND from PARTICIPATION_PROB and NUM_CLIENTS."""
+    global UPDATES_PER_ROUND
+    UPDATES_PER_ROUND = max(MIN_UPDATES_TO_AGGREGATE, ceil(PARTICIPATION_PROB * NUM_CLIENTS))
+
+
+def select_participants_for_round(round_idx: int):
+    """Select and persist a deterministic participant set for the given round.
+
+    Selection draws k = round(PARTICIPATION_PROB * NUM_CLIENTS) unique client ids
+    from the range [0, NUM_CLIENTS). Returned client ids are strings to match
+    client_id usage elsewhere.
+    """
+    if round_idx in selected_clients_by_round:
+        return selected_clients_by_round[round_idx]
+
+    k = max(1, int(round(PARTICIPATION_PROB * NUM_CLIENTS)))
+    k = min(k, NUM_CLIENTS)
+    sampled = set(str(x) for x in random.sample(range(NUM_CLIENTS), k))
+    selected_clients_by_round[round_idx] = sampled
+    print(f"[SERVER] Selected {len(sampled)} participants for round {round_idx}: {sorted(list(sampled))}")
+    return sampled
 
 # ============ DATA VALIDATION ============
 class UpdateRequest(BaseModel):
@@ -77,6 +115,23 @@ def get_model():
         "round": agg.current_round,
         "weights": agg.get_weights(),  # Convert tensors → lists
     }
+
+
+@app.get("/should_participate")
+def should_participate(client_id: str):
+    """
+    Clients can call this endpoint to check whether they were randomly selected
+    to participate in the current round. Server uses PARTICIPATION_PROB to
+    select clients per round.
+
+    Returns: {selected: bool, round: int}
+    """
+
+    # Use deterministic per-round selection: server picks participants once per
+    # round and records them in `selected_clients_by_round`.
+    selected_set = select_participants_for_round(agg.current_round)
+    selected = str(client_id) in selected_set
+    return {"selected": selected, "round": agg.current_round}
 
 
 @app.post("/submit_update")

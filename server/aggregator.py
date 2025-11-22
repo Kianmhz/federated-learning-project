@@ -8,6 +8,7 @@ class Aggregator:
         self.current_round = 0
         self.updates = []
         self.data_sizes = []
+        self.last_num_updates = 0
 
     def get_weights(self):
         return {k: v.cpu().tolist() for k, v in self.global_model.state_dict().items()}
@@ -26,12 +27,20 @@ class Aggregator:
         # Weighted averaging of deltas
         total_data = sum(self.data_sizes)
 
+        # If for some reason total_data is zero (edge case), fall back to
+        # uniform averaging across received updates to avoid division by zero.
+        use_data_weights = total_data > 0
+
         avg_delta = {}
         for key in global_state.keys():
-            avg_delta_tensor = sum(
-                (torch.tensor(update[key]) * (ds / total_data))
-                for update, ds in zip(self.updates, self.data_sizes)
-            )
+            if use_data_weights:
+                avg_delta_tensor = sum(
+                    (torch.tensor(update[key]) * (ds / total_data))
+                    for update, ds in zip(self.updates, self.data_sizes)
+                )
+            else:
+                # uniform average over updates
+                avg_delta_tensor = sum((torch.tensor(update[key]) for update in self.updates)) / len(self.updates)
             avg_delta[key] = avg_delta_tensor
 
         # Apply averaged delta: global + avg_delta
@@ -39,5 +48,7 @@ class Aggregator:
 
         self.global_model.load_state_dict(new_state)
         self.current_round += 1
+        # record how many updates were used for this aggregation (diagnostics)
+        self.last_num_updates = len(self.updates)
         self.updates = []
         self.data_sizes = []
