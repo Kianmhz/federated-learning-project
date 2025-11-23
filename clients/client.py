@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -80,7 +81,6 @@ def run_client_loop(
 
         if not selected:
             print(f"[Client {client_id}] Not selected for round {server_round}. Sleeping until next check...")
-            import time
 
             time.sleep(3)
             continue
@@ -174,21 +174,48 @@ def run_client_loop(
         print(
             f"[Client {client_id}] Sending update... (DP={'ON' if dp_enabled else 'OFF'})"
         )
-        requests.post(
-            f"{SERVER_URL}/submit_update",
-            json={
-                "client_id": str(
-                    client_id
-                ),  # added id so that server can identify client
-                "weights": weights_to_send,
-                "data_size": len(train_loader.dataset),
-            },
-        )
+        # Include the round id the client believes it's participating in so
+        # the server can reject stale/duplicate submissions.
+        submit_payload = {
+            "client_id": str(client_id),
+            "weights": weights_to_send,
+            "data_size": len(train_loader.dataset),
+            "round": server_round,
+        }
 
-        print(f"[Client {client_id}] Update sent. Waiting next round...\n")
-        import time
+        try:
+            resp = requests.post(f"{SERVER_URL}/submit_update", json=submit_payload)
+            resp_json = resp.json() if resp is not None else {}
+        except Exception as e:
+            print(f"[Client {client_id}] Failed to submit update: {e}")
+            resp_json = {}
 
-        time.sleep(3)
+        # After submitting, wait until server advances to a newer round than
+        # the one we just submitted for. This prevents a fast client from
+        # submitting multiple updates for the same server round.
+        print(f"[Client {client_id}] Update sent. Waiting for server to advance from round {server_round}...\n")
+
+        # Poll server's /get_model endpoint for the current round. Timeout
+        # after a reasonable period so client can retry participation checks.
+        wait_start = time.time()
+        timeout = 60  # seconds
+        while True:
+            try:
+                status = requests.get(f"{SERVER_URL}/config").json()
+                server_now = status.get("current_round", None)
+            except Exception:
+                server_now = None
+
+            if server_now is not None and server_now > server_round:
+                # server completed aggregation and moved to next round
+                break
+
+            if time.time() - wait_start > timeout:
+                # give up waiting after timeout; loop back and check selection
+                print(f"[Client {client_id}] Waited {timeout}s for server to advance; re-checking participation...")
+                break
+
+            time.sleep(1)
 
 
 def client_loop(
@@ -216,7 +243,7 @@ if __name__ == "__main__":
         "--dp", action="store_true", help="Enable differential privacy (clip + noise)"
     )
     parser.add_argument(
-        "--noise", type=float, default=0.0, help="Noise multiplier (std = noise * clip)"
+        "--noise", type=float, default=0.2, help="Noise multiplier (std = noise * clip)"
     )
     parser.add_argument("--clip", type=float, default=1.0, help="Clip norm for DP (L2)")
     parser.add_argument(

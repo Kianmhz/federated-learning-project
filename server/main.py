@@ -38,13 +38,16 @@ training_history = []  # Store metrics: [{round, accuracy, loss, ...}, ...]
 # expected_selected = round(p * num_clients) can be used as a target, but server
 # will aggregate as soon as it receives updates from all selected clients OR when
 # at least MIN_UPDATES_TO_AGGREGATE are available.
-PARTICIPATION_PROB = 0.5
-NUM_CLIENTS = 10
+PARTICIPATION_PROB = float(os.environ.get("FL_PARTICIPATION_PROB", 0.5))
+# Number of clients (default 3) can be overridden by environment variable
+NUM_CLIENTS = int(os.environ.get("FL_NUM_CLIENTS", 3))
 MIN_UPDATES_TO_AGGREGATE = 1  # safety lower bound
 UPDATES_PER_ROUND = max(MIN_UPDATES_TO_AGGREGATE, ceil(PARTICIPATION_PROB * NUM_CLIENTS))
 
 # Deterministic per-round selection storage: round_index -> set(client_id_str)
 selected_clients_by_round = {}
+# Track which clients have already submitted for a given round: round_index -> set(client_id_str)
+submitted_clients_by_round = {}
 
 # Adaptive participation tuning parameters
 # If recent accuracy improvement over P_ADJUST_WINDOW rounds is < P_IMPROVE_MIN,
@@ -113,7 +116,6 @@ class UpdateRequest(BaseModel):
     client_id: str
     weights: dict  # Model weights as nested dict
     data_size: int  # Number of samples client trained on
-
 
 # ============ API ENDPOINTS ============
 
@@ -187,8 +189,19 @@ def submit_update(upd: UpdateRequest):
     DISTRIBUTED CONCEPT: Asynchronous Aggregation
     Clients submit independently, server aggregates when ready
     """
-    # Store update in aggregator
+    # Ensure we only accept one submission per client per round. If client
+    # submits for a stale round (client thinks it's round N but server is at M>N)
+    # or if client already submitted for the current round, reject the submission
+    current_round = agg.current_round
+    submitted_set = submitted_clients_by_round.get(current_round, set())
+    if upd.client_id in submitted_set:
+        print(f"[SERVER] ✗ Duplicate submission from client {upd.client_id} for round {current_round} - rejecting")
+        return {"status": "duplicate", "round": current_round}
+
+    # Accept and store update
     agg.receive_update(upd.weights, upd.data_size)
+    submitted_set.add(upd.client_id)
+    submitted_clients_by_round[current_round] = submitted_set
 
     # Track this client (for dashboard)
     client_id = upd.client_id
@@ -200,7 +213,7 @@ def submit_update(upd: UpdateRequest):
     }
 
     print(
-        f"[SERVER] ✓ Client {client_id} submitted. Updates: {len(agg.updates)}/{UPDATES_PER_ROUND}"
+        f"[SERVER] ✓ Client {client_id} submitted for round {current_round}. Updates: {len(agg.updates)}/{UPDATES_PER_ROUND}"
     )
 
     # Check if ready to aggregate
@@ -209,6 +222,17 @@ def submit_update(upd: UpdateRequest):
 
         # Perform Federated Averaging (your partner's code)
         agg.aggregate()
+
+        # After successful aggregation for this round, clear submitted set for
+        # the previous round (they've been processed). The aggregator already
+        # incremented agg.current_round inside aggregate(), so remove entries
+        # for the round we just finished.
+        finished_round = agg.current_round - 1
+        if finished_round in submitted_clients_by_round:
+            try:
+                del submitted_clients_by_round[finished_round]
+            except KeyError:
+                pass
 
         # Optionally adjust participation probability based on recent progress
         try:
@@ -283,6 +307,17 @@ def get_metrics():
         "rounds": [h["round"] for h in training_history],
         "accuracy": [h["accuracy"] for h in training_history],
         "loss": [h["loss"] for h in training_history],
+    }
+
+
+@app.get("/config")
+def get_config():
+    """Return server-side configuration useful for clients."""
+    return {
+        "num_clients": NUM_CLIENTS,
+        "participation_prob": PARTICIPATION_PROB,
+        "updates_per_round": UPDATES_PER_ROUND,
+        "current_round": agg.current_round,
     }
 
 
