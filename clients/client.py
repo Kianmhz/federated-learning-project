@@ -243,7 +243,7 @@ if __name__ == "__main__":
         "--dp", action="store_true", help="Enable differential privacy (clip + noise)"
     )
     parser.add_argument(
-        "--noise", type=float, default=0.2, help="Noise multiplier (std = noise * clip)"
+        "--noise", type=float, default=0.05, help="Noise multiplier (std = noise * clip)"
     )
     parser.add_argument("--clip", type=float, default=1.0, help="Clip norm for DP (L2)")
     parser.add_argument(
