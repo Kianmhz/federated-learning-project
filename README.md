@@ -297,7 +297,7 @@ federated-learning-project/
 | Name | Role | Responsibilities |
 |------|------|------------------|
 | Iqra Zahid, Kianmehr Haddad Zahmatkesh | ML Engineer & Project Lead | System design, integration, model training, dataset partitioning, FedAvg logic |
-| Abdulkarim Noorzaie, AbdurRahman Abdurrahman | Full-Stack Developer | Dashboard UI, API server, visualization, metrics tracking |
+| Abdulkarim Noorzaie, Owais AbdurRahman | Full-Stack Developer | Dashboard UI, API server, visualization, metrics tracking |
 
 ---
 
@@ -306,7 +306,7 @@ federated-learning-project/
 - **Instructor**: Dr. Khalid A. Hafeez
 - **Course**: SOFE4790U - Distributed Systems (Fall 2025)
 - **Institution**: Ontario Tech University
-- **Team Members**: Iqra Zahid, Kianmehr Haddad Zahmatkesh, Abdulkarim Noorzaie, AbdurRahman Abdurrahman
+- **Team Members**: Iqra Zahid, Kianmehr Haddad Zahmatkesh, Abdulkarim Noorzaie, Owais AbdurRahman 
 
 **Last Updated**: November 2025  
 **Version**: 1.0.0
