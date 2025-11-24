@@ -155,20 +155,8 @@ git clone https://github.com/Iqra-Z/federated-learning-project
 cd federated-learning-project
 ```
 
-### Step 2: Create Python Environment (Recommended)
 
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate it
-# Windows:
-venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
-```
-
-### Step 3: Install Python Dependencies
+### Step 2: Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -183,7 +171,7 @@ pip install -r requirements.txt
 - Requests (HTTP client)
 
 
-### Step 4: Setup React Dashboard
+### Step 3: Setup React Dashboard
 
 ```bash
 # Create React app
@@ -195,8 +183,6 @@ cd dashboard
 # Install dependencies
 npm install recharts
 
-# Copy the App.js code provided in artifacts
-# (Replace dashboard/src/App.js with the enhanced version)
 
 # Return to root
 cd ..
